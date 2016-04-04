@@ -14,6 +14,7 @@ import re
 from memcache import Client
 import vlc
 import threading
+import cwiid
 
 #Settings
 button = 18 		# GPIO Pin with button connected
@@ -330,66 +331,83 @@ def format_time(self, milliseconds):
 	h, m = divmod(m, 60)
 	return "%d:%02d:%02d" % (h, m, s)
 
-def start_old():
-	global audioplaying, p
-	inp = None
-	last = GPIO.input(button)
-	print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-	while True:
-		val = GPIO.input(button)
-		if val != last:
-			last = val
-			if val == 1 and recorded == True:
-				print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-				rf = open(path+'recording.wav', 'w')
-				rf.write(audio)
-				rf.close()
-				inp = None
-				alexa_speech_recognizer()
-			elif val == 0:
-				GPIO.output(rec_light, GPIO.HIGH)
-				print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-				inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
-				inp.setchannels(1)
-				inp.setrate(16000)
-				inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-				inp.setperiodsize(500)
-				audio = ""
-				if audioplaying:
-					p.stop()
-				l, data = inp.read()
-				if l:
-					audio += data
-				recorded = True
-		elif val == 0:
-			l, data = inp.read()
-			if l:
-				audio += data
+def connect_wiimote()
+	connected = False
+	while connected == False:
+		try:
+			wii=cwiid.Wiimote()
+			wii.led = 1
+			connected = True
+		except RuntimeError:
+			print "Error opening wiimote connection"
+			time.sleep(10)
+			connected=False
+	wii.rpt_mode = cwiid.RPT_BTN
+	return wii
 
-def start():
+def rumble(wii, kind='once'):
+	if kind == 'once':
+		wii.rumble = 1
+		time.sleep(0.5)
+		wii.rumble = 0
+	if kind =='twice':
+		wii.rumble = 1
+		time.sleep(0.2)
+		wii.rumble = 0
+		time.sleep(0.2)
+		wii.rumble = 1
+		time.sleep(0.2)
+		wii.rumble = 0
+
+def start(wii):
 	global audioplaying, p
-	while True:
-		print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
-		if audioplaying: p.stop()
-		print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		GPIO.output(rec_light, GPIO.HIGH)
-		inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
-		inp.setchannels(1)
-		inp.setrate(16000)
-		inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-		inp.setperiodsize(500)
-		audio = ""
-		while(GPIO.input(button)==0): # we keep recording while the button is pressed
-			l, data = inp.read()
-			if l:
-				audio += data
-		print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		rf = open(path+'recording.wav', 'w')
-		rf.write(audio)
-		rf.close()
-		inp = None
-		alexa_speech_recognizer()
+	buttons = wii.state['buttons']
+    if (buttons & cwiid.BTN_A):
+        last = 0
+    else:
+        last = 1
+    while True:
+        buttons = wii.state['buttons']
+        # ------ Alexa Interface -------------------
+        if (buttons & cwiid.BTN_A):
+            val = 0
+        else:
+            val = 1
+        if val != last:
+            last = val
+            if val == 1 and recorded == True:
+                rf = open(path+'recording.wav', 'w')
+                rf.write(audio)
+                rf.close()
+                inp = None
+                alexa_speech_recognizer()
+            elif val == 0:
+            	if audioplaying: p.stop()
+            	print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
+                GPIO.output(rec_light, GPIO.HIGH)
+                inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
+                inp.setchannels(1)
+                inp.setrate(16000)
+                inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+                inp.setperiodsize(500)
+                audio = ""
+                l, data = inp.read()
+                if l:
+                    audio += data
+                recorded = True
+        elif val == 0:
+            l, data = inp.read()
+            if l:
+                audio += data
+        # ----------------------------------------
+        # If Plus and Minus buttons pressed
+        # together then rumble and quit.
+        if (buttons - cwiid.BTN_PLUS - cwiid.BTN_MINUS == 0):  
+            print '\nClosing connection ...'
+            rumble(wii,'twice')
+            wii.close()
+            # Wait for reconnect
+            wii = connect_wiimote()
 
 if __name__ == "__main__":
 	GPIO.setwarnings(False)
@@ -407,4 +425,5 @@ if __name__ == "__main__":
 		GPIO.output(plb_light, GPIO.HIGH)
 		time.sleep(.1)
 		GPIO.output(plb_light, GPIO.LOW)
-	start()
+	wii = connect_wiimote()
+	start(wii)
